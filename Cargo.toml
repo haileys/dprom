@@ -1,0 +1,32 @@
+[package]
+name = "dprom"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "dprom-file-gauge"
+path = "src/cmd/file_gauge.rs"
+
+[[bin]]
+name = "dprom-export"
+path = "src/cmd/export.rs"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1"
+axum = "0.6"
+derive_more = "0.99"
+futures = "0.3"
+itertools = "0.10.5"
+rustls = "0.20"
+slog = { version = "2", features = ["max_level_trace", "release_max_level_info"] }
+sloggers = "2"
+structopt = { version = "0.3", features = ["color"] }
+tokio = { version = "1", features = ["macros", "rt", "fs", "time"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+tracing = "0.1"
+zbus = { version = "3", default-features = false, features = ["tokio"] }
