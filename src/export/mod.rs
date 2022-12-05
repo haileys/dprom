@@ -1,33 +1,39 @@
 pub mod context;
 pub mod dbus;
+pub mod http;
 pub mod metric;
 
-use futures::stream::{self, StreamExt};
+use futures::future;
+use structopt::StructOpt;
 
-enum Event {
-    Dbus(Result<(), zbus::Error>),
-    Metric(metric::Record),
+#[derive(StructOpt, Debug)]
+pub struct Opt {
+    #[structopt(flatten)]
+    dbus: DbusOpt,
+    #[structopt(flatten)]
+    http: HttpOpt,
 }
 
-pub async fn run(log: slog::Logger) -> anyhow::Result<()> {
+#[derive(StructOpt, Debug)]
+pub struct DbusOpt {
+    #[structopt(long)]
+    system: bool,
+    #[structopt(long)]
+    session: bool,
+}
+
+#[derive(StructOpt, Debug)]
+pub struct HttpOpt {
+    #[structopt(long)]
+    listen: std::net::SocketAddr,
+}
+
+pub async fn run(log: slog::Logger, opt: Opt) -> anyhow::Result<()> {
     let (export, metric_stream) = metric::Export::new();
-    let dbus_stream = stream::once(dbus::run(log.clone(), export));
 
-    let events = stream::select(
-        dbus_stream.map(Event::Dbus),
-        metric_stream.map(Event::Metric),
-    );
+    let dbus = tokio::spawn(dbus::run(log.clone(), export, opt.dbus));
+    let http = tokio::spawn(http::run(log.clone(), metric_stream, opt.http));
 
-    futures::pin_mut!(events);
-
-    while let Some(event) = events.next().await {
-        match event {
-            Event::Dbus(result) => { result?; }
-            Event::Metric((name, value)) => {
-                slog::info!(log, "{} = {:?}", name, value);
-            }
-        }
-    }
-
+    future::select(dbus, http).await.factor_first().0??;
     Ok(())
 }

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::sync::{Arc, Mutex};
+use std::fmt::{self, Display};
 
 use derive_more::Display;
 use futures::stream::{self, Stream, StreamExt};
@@ -17,7 +18,7 @@ pub struct Export {
     record_tx: mpsc::Sender<Record>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Display)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Display)]
 pub struct MetricName(Arc<String>);
 
 impl<T> From<T> for MetricName where T: Into<String> {
@@ -29,6 +30,14 @@ impl<T> From<T> for MetricName where T: Into<String> {
 #[derive(Clone, Debug)]
 pub enum MetricValue {
     Gauge(f64),
+}
+
+impl Display for MetricValue {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            MetricValue::Gauge(val) => write!(f, "{}", val),
+        }
+    }
 }
 
 struct ExportShared {

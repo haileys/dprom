@@ -10,14 +10,34 @@ use zbus::zvariant::OwnedObjectPath;
 use tokio::task::JoinSet;
 
 use crate::dbus::{dprom::DProm1Proxy, gauge::Gauge1Proxy};
+use crate::export::DbusOpt;
 use crate::export::metric::Export;
 use crate::export::context::{Ctx, BusCtx, PathCtx};
 
-pub async fn run(log: slog::Logger, export: Export) -> zbus::Result<()> {
-    let conn = Arc::new(zbus::Connection::session().await?);
+pub async fn run(log: slog::Logger, export: Export, opt: DbusOpt) -> anyhow::Result<()> {
     let export = Arc::new(export);
-    let ctx = Ctx::new(log, conn, export);
-    run_top(ctx).await?;
+
+    let futures = FuturesUnordered::new();
+
+    if opt.session {
+        let log = log.new(slog::o!("dbus" => "session"));
+        let conn = Arc::new(zbus::Connection::session().await?);
+        let ctx = Ctx::new(log, conn, export.clone());
+        futures.push(run_top(ctx));
+    }
+
+    if opt.system {
+        let log = log.new(slog::o!("dbus" => "system"));
+        let conn = Arc::new(zbus::Connection::session().await?);
+        let ctx = Ctx::new(log, conn, export.clone());
+        futures.push(run_top(ctx));
+    }
+
+    if futures.is_empty() {
+        slog::crit!(log, "no dbus connection configured. hint: pass --session or --system");
+    }
+
+    futures.try_collect::<()>().await?;
     Ok(())
 }
 
@@ -89,7 +109,6 @@ async fn run_top(ctx: Ctx) -> zbus::Result<()> {
             }
             NameEvent::Del(bus) => {
                 if let Some(handle) = abort_handles.remove(&bus) {
-                    slog::trace!(ctx.log, "stopping bus"; "bus" => bus.to_string());
                     handle.abort();
                 }
             }
