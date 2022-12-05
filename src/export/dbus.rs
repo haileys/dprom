@@ -11,7 +11,7 @@ use tokio::task::JoinSet;
 
 use crate::dbus::{dprom::DProm1Proxy, gauge::Gauge1Proxy};
 use crate::export::DbusOpt;
-use crate::export::metric::Export;
+use crate::export::metric::{Export, MetricName};
 use crate::export::context::{Ctx, BusCtx, PathCtx};
 
 pub async fn run(log: slog::Logger, export: Export, opt: DbusOpt) -> anyhow::Result<()> {
@@ -136,7 +136,7 @@ async fn run_bus(ctx: BusCtx) -> zbus::Result<()> {
 
     // log the new bus at this point, since we will have errored and bailed already
     // if the bus is not a dprom bus
-    slog::trace!(ctx.log, "watching bus");
+    slog::debug!(ctx.log, "watching bus");
 
     let run = future::poll_fn({
         let mut changes = Box::pin(changes);
@@ -187,7 +187,7 @@ async fn run_metrics(ctx: BusCtx, paths: Vec<OwnedObjectPath>) {
     paths.into_iter()
         .map(|path| ctx.with_path(path))
         .map(|ctx| async move {
-            slog::trace!(ctx.log, "watching metric");
+            slog::debug!(ctx.log, "watching metric");
             match run_metric(ctx.clone()).await {
                 Ok(()) => {}
                 Err(e) => {
@@ -212,7 +212,7 @@ async fn run_metric(ctx: PathCtx) -> zbus::Result<()> {
 
 async fn run_gauge(ctx: &PathCtx) -> zbus::Result<()> {
     let gauge = ctx.proxy::<Gauge1Proxy>().await?;
-    let name = gauge.name().await?;
+    let name = MetricName::from(gauge.name().await?);
 
     // open stream before reading first value to avoid race
     let stream = gauge.receive_value_changed().await
@@ -223,10 +223,12 @@ async fn run_gauge(ctx: &PathCtx) -> zbus::Result<()> {
     let stream = stream::once(future::ready(Ok(value))).chain(stream);
     futures::pin_mut!(stream);
 
-    let metric = ctx.export.metric(name);
+    let metric = ctx.export.metric(name.clone());
 
     while let Some(result) = stream.next().await {
-        metric.gauge(result?).await;
+        let value = result?;
+        slog::info!(ctx.log, "{} = {}", name, value);
+        metric.gauge(value).await;
     }
 
     Ok(())
