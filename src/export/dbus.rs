@@ -7,12 +7,12 @@ use futures::future::{self, Future};
 use futures::stream::{self, Stream, StreamExt, TryStreamExt, FuturesUnordered};
 use zbus::names::{BusName, ErrorName, UniqueName};
 use zbus::zvariant::OwnedObjectPath;
-use tokio::task::JoinSet;
 
 use crate::dbus::{dprom::DProm1Proxy, gauge::Gauge1Proxy};
 use crate::export::DbusOpt;
 use crate::export::metric::{Export, MetricName};
 use crate::export::context::{Ctx, BusCtx, PathCtx};
+use crate::future::linger::{linger, Linger};
 
 pub async fn run(log: slog::Logger, export: Export, opt: DbusOpt) -> anyhow::Result<()> {
     let export = Arc::new(export);
@@ -68,54 +68,50 @@ impl NameEvent {
 async fn run_top(ctx: Ctx) -> zbus::Result<()> {
     let dbus = zbus::fdo::DBusProxy::new(&ctx.conn).await?;
 
-    let name_stream = dbus.receive_name_owner_changed().await?
+    let mut tasks = HashMap::<UniqueName<'static>, Linger<_>>::new();
+
+    // must open name events stream before calling list_names to avoid race
+    let name_events = dbus.receive_name_owner_changed().await?
         .filter_map(|signal| future::ready(NameEvent::from_signal(signal).transpose()));
 
-    let existing_names = dbus.list_names().await?
-        .into_iter()
-        .filter_map(|name| match name.into_inner() {
-            BusName::Unique(uniq) => Some(uniq),
-            BusName::WellKnown(_) => None,
-        })
-        .map(NameEvent::Add)
-        .map(Ok);
+    // start task for each unique bus name on the dbus, skipping wellknown names:
+    tasks.extend(
+        dbus.list_names().await?
+            .into_iter()
+            .filter_map(|name| match name.into_inner() {
+                BusName::Unique(uniq) => Some(uniq),
+                BusName::WellKnown(_) => None,
+            })
+            .map(|name| {
+                let ctx = ctx.with_bus(name.clone());
+                (name, linger(bus_task(ctx)))
+            }));
 
-    let mut join_set = JoinSet::new();
-    let mut abort_handles = HashMap::new();
-
-    let name_stream = stream::iter(existing_names).chain(name_stream);
-
-    futures::pin_mut!(name_stream);
-
-    while let Some(event) = name_stream.next().await {
+    // process name events:
+    futures::pin_mut!(name_events);
+    while let Some(event) = name_events.next().await {
         match event? {
             NameEvent::Add(bus) => {
                 let ctx = ctx.with_bus(bus.clone());
-
-                // start the bus task
-                let handle = join_set.spawn(async move {
-                    let result = protect_unknown_dispatch(
-                        run_bus(ctx.clone()).await);
-
-                    if let Err(e) = result {
-                        slog::error!(ctx.log, "bus error: {:?}", e);
-                    }
-                });
-
-                let prev_handle = abort_handles.insert(bus, handle);
-                if let Some(prev_handle) = prev_handle {
-                    prev_handle.abort();
-                }
+                tasks.insert(bus, linger(bus_task(ctx)));
             }
             NameEvent::Del(bus) => {
-                if let Some(handle) = abort_handles.remove(&bus) {
-                    handle.abort();
-                }
+                tasks.remove(&bus);
             }
         }
     }
 
-    Ok(())
+    return Ok(());
+
+    async fn bus_task(ctx: BusCtx) {
+        match run_bus(ctx.clone()).await {
+            Ok(()) => {}
+            Err(e) if is_unknown_dispatch_error(&e) => { /* ignore */ }
+            Err(e) => {
+                slog::error!(ctx.log, "bus error: {:?}", e);
+            }
+        }
+    }
 }
 
 async fn run_bus(ctx: BusCtx) -> zbus::Result<()> {
