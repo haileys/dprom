@@ -1,9 +1,7 @@
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::Poll;
 use std::collections::HashMap;
 
-use futures::future::{self, Future};
+use futures::future;
 use futures::stream::{self, Stream, StreamExt, TryStreamExt, FuturesUnordered};
 use zbus::names::{BusName, ErrorName, UniqueName};
 use zbus::zvariant::OwnedObjectPath;
@@ -121,79 +119,52 @@ async fn run_bus(ctx: BusCtx) -> zbus::Result<()> {
         .build()
         .await?;
 
-    // setup receive stream first:
-    let changes = dprom.receive_metrics_changed().await
-        .then(|change| async move { change.get().await })
-        .map_ok(|metric_paths| run_metrics(ctx.clone(), metric_paths));
-
-    // start first metrics set:
-    let init_fut = run_metrics(ctx.clone(),
-        dprom.metrics().await?);
+    let stream = metric_paths_stream(dprom).await?;
 
     // log the new bus at this point, since we will have errored and bailed already
-    // if the bus is not a dprom bus
+    // if the bus is not a dprom bus:
     slog::debug!(ctx.log, "watching bus");
 
-    let run = future::poll_fn({
-        let mut changes = Box::pin(changes);
-        let mut fut_slot = Some(Box::pin(init_fut));
+    stream.try_fold(HashMap::new(), |mut tasks, metric_paths| {
+        let new_tasks = metric_paths.into_iter()
+            .map(|path| {
+                let task = tasks.remove(&path).unwrap_or_else(|| {
+                    let ctx = ctx.with_path(path.clone());
+                    linger(metric_task(ctx))
+                });
 
-        move |cx| {
-            match Pin::new(&mut changes).poll_next(cx) {
-                // no changes, fall through to polling existing future:
-                Poll::Pending => {}
+                (path, task)
+            })
+            .collect();
 
-                // there is new future to start polling instead:
-                Poll::Ready(Some(Ok(fut))) => {
-                    fut_slot = Some(Box::pin(fut));
-                }
+        future::ok(new_tasks)
+    }).await?;
 
-                // error reading update stream, bail out:
-                Poll::Ready(Some(Err(e))) => {
-                    return Poll::Ready(Err(e))
-                }
+    return Ok(());
 
-                // update stream finished, bail out:
-                Poll::Ready(None) => {
-                    return Poll::Ready(Ok(()));
-                }
+    async fn metric_paths_stream(proxy: DProm1Proxy<'_>)
+        -> Result<impl Stream<Item = Result<Vec<OwnedObjectPath>, zbus::Error>> + '_, zbus::Error>
+    {
+        // open receive stream first to prevent race
+        let metrics_events = proxy.receive_metrics_changed().await
+            .then(|change| async move { change.get().await });
+
+        // get current value and prepend to stream
+        let metric_paths = proxy.metrics().await?;
+
+        Ok(stream::once(future::ok(metric_paths))
+            .chain(metrics_events))
+    }
+
+    async fn metric_task(ctx: PathCtx) {
+        slog::debug!(ctx.log, "watching metric");
+        match run_metric(ctx.clone()).await {
+            Ok(()) => {}
+            Err(e) => {
+                slog::error!(ctx.log, "error watching metric: {:?}", e);
             }
-
-            // poll current future if exists:
-            if let Some(fut) = fut_slot.as_mut() {
-                match fut.as_mut().poll(cx) {
-                    // current future still running:
-                    Poll::Pending => {}
-
-                    // current future finished, clear slot and wait for new future from stream:
-                    Poll::Ready(()) => {
-                        fut_slot = None;
-                    }
-                }
-            }
-
-            Poll::Pending
         }
-    });
-
-    run.await
-}
-
-async fn run_metrics(ctx: BusCtx, paths: Vec<OwnedObjectPath>) {
-    paths.into_iter()
-        .map(|path| ctx.with_path(path))
-        .map(|ctx| async move {
-            slog::debug!(ctx.log, "watching metric");
-            match run_metric(ctx.clone()).await {
-                Ok(()) => {}
-                Err(e) => {
-                    slog::error!(ctx.log, "error watching metric: {:?}", e);
-                }
-            }
-        })
-        .collect::<FuturesUnordered<_>>()
-        .collect::<()>()
-        .await;
+    }
 }
 
 async fn run_metric(ctx: PathCtx) -> zbus::Result<()> {
