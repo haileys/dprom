@@ -9,8 +9,18 @@ pub struct Config {
 
 #[derive(Deserialize)]
 pub struct Dbus {
+    #[serde(default = "bool_true")]
     pub system: bool,
+    #[serde(default = "bool_false")]
     pub session: bool,
+}
+
+fn bool_true() -> bool {
+    true
+}
+
+fn bool_false() -> bool {
+    false
 }
 
 #[derive(Deserialize)]
