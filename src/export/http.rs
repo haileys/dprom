@@ -9,14 +9,14 @@ use axum::routing::get;
 use futures::stream::{Stream, StreamExt};
 
 use crate::export::metric::{MetricName, MetricValue, Record};
-use crate::export::HttpOpt;
+use crate::export::config;
 
 const UPDATE_CHUNK_SIZE: usize = 64; // chosen arbritrarily
 
 pub async fn run(
     log: slog::Logger,
     metric_stream: impl Stream<Item = Record> + Send + 'static,
-    opt: HttpOpt,
+    config: config::Http,
 ) -> Result<(), anyhow::Error> {
     let live = LiveMetrics::new(log.clone(), metric_stream);
 
@@ -25,7 +25,7 @@ pub async fn run(
         .route("/metrics", get(metrics))
         .with_state(live);
 
-    axum::Server::bind(&opt.listen)
+    axum::Server::bind(&config.listen)
         .serve(app.into_make_service())
         .await?;
 

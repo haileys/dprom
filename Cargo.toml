@@ -19,14 +19,19 @@ path = "src/cmd/export.rs"
 [dependencies]
 anyhow = "1"
 axum = "0.6"
+axum-server = { version = "0.4.4", features = ["tls-rustls"] }
 derive_more = "0.99"
 futures = "0.3"
 itertools = "0.10.5"
 rustls = "0.20"
+serde = "1.0.149"
+serde_derive = "1.0.149"
 slog = { version = "2", features = ["max_level_trace", "release_max_level_info"] }
 sloggers = "2"
 structopt = { version = "0.3", features = ["color"] }
 tokio = { version = "1", features = ["macros", "rt", "fs", "time"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
+tokio-util = "0.7.4"
+toml = "0.5.9"
 tracing = "0.1"
 zbus = { version = "3", default-features = false, features = ["tokio"] }

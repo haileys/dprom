@@ -7,24 +7,24 @@ use zbus::names::{BusName, ErrorName, UniqueName};
 use zbus::zvariant::OwnedObjectPath;
 
 use crate::dbus::{dprom::DProm1Proxy, gauge::Gauge1Proxy};
-use crate::export::DbusOpt;
-use crate::export::metric::{Export, MetricName};
+use crate::export::config;
 use crate::export::context::{Ctx, BusCtx, PathCtx};
+use crate::export::metric::{Export, MetricName};
 use crate::future::linger::{linger, Linger};
 
-pub async fn run(log: slog::Logger, export: Export, opt: DbusOpt) -> anyhow::Result<()> {
+pub async fn run(log: slog::Logger, export: Export, config: config::Dbus) -> anyhow::Result<()> {
     let export = Arc::new(export);
 
     let futures = FuturesUnordered::new();
 
-    if opt.session {
+    if config.session {
         let log = log.new(slog::o!("dbus" => "session"));
         let conn = Arc::new(zbus::Connection::session().await?);
         let ctx = Ctx::new(log, conn, export.clone());
         futures.push(run_top(ctx));
     }
 
-    if opt.system {
+    if config.system {
         let log = log.new(slog::o!("dbus" => "system"));
         let conn = Arc::new(zbus::Connection::session().await?);
         let ctx = Ctx::new(log, conn, export.clone());
