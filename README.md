@@ -16,7 +16,7 @@ Example configuration files for both of these services can be found in the [`con
 This repo ships with default configuration and Arch-compatible systemd units. A package can be built with the `PKGBUILD` in the [`pkg/arch/`](/pkg/arch) directory:
 
 ```sh-session
-dprom$ cd pkg/arch
-dprom/pkg/arch$ makepkg -si
-# will build package and prompt to install with sudo
+$ cd pkg/arch
+$ makepkg -si
+... will build package and prompt to install with sudo
 ```
