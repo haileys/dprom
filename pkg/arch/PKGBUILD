@@ -1,0 +1,31 @@
+pkgname=dprom
+pkgver=0.1.0
+pkgrel=1
+depends=("dbus")
+makedepends=("cargo")
+arch=("i686" "x86_64" "armv6h" "armv7h")
+
+prepare() {
+    cargo fetch --locked --target "$CARCH-unknown-linux-gnu"
+}
+
+build() {
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo build --frozen --release
+}
+
+package() {
+    # rust binaries
+    install -Dm0755 -t "$pkgdir/usr/bin/" "$srcdir/target/release/dprom-export"
+    install -Dm0755 -t "$pkgdir/usr/bin/" "$srcdir/target/release/dprom-file-gauge"
+
+    # dist files
+    install -Dm0644 -t "$pkgdir/etc/dprom/" "$srcdir/dist/etc/dprom/export.toml"
+    install -Dm0644 -t "$pkgdir/usr/lib/systemd/system/" "$srcdir/dist/usr/lib/systemd/system/dprom-export.service"
+
+    # dbus interfaces
+    install -Dm0644 -t "$pkgdir/usr/share/dbus-1/interfaces/" "$srcdir/dbus/org.hails.dprom.Counter1.xml"
+    install -Dm0644 -t "$pkgdir/usr/share/dbus-1/interfaces/" "$srcdir/dbus/org.hails.dprom.DProm1.xml"
+    install -Dm0644 -t "$pkgdir/usr/share/dbus-1/interfaces/" "$srcdir/dbus/org.hails.dprom.Gauge1.xml"
+}
