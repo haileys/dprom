@@ -2,11 +2,8 @@ use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::sync::{Arc, RwLock};
 
-use axum::Router;
-use axum::extract::State;
-use axum::response::Html;
-use axum::routing::get;
 use futures::stream::{Stream, StreamExt};
+use warp::Filter;
 
 use crate::export::metric::{MetricName, MetricValue, Record};
 use crate::export::config;
@@ -18,26 +15,52 @@ pub async fn run(
     metric_stream: impl Stream<Item = Record> + Send + 'static,
     config: config::Http,
 ) -> Result<(), anyhow::Error> {
-    let live = LiveMetrics::new(log.clone(), metric_stream);
+    let live = Arc::new(LiveMetrics::new(log.clone(), metric_stream));
 
-    let app = Router::new()
-        .route("/", get(root))
-        .route("/metrics", get(metrics))
-        .with_state(live);
+    let root = warp::path!().then(root);
 
-    axum::Server::bind(&config.listen)
-        .serve(app.into_make_service())
-        .await?;
+    let metrics = warp::path!("metrics").then(move || {
+        let live = live.clone();
+        async move { metrics(&live).await }
+    });
+
+    let routes = warp::get().and(root.or(metrics));
+
+    let server = warp::serve(routes);
+
+    match config.tls {
+        None => {
+            server.run(config.listen).await;
+        }
+        Some(tls) => {
+            let server = server
+                .tls()
+                .key_path(tls.key)
+                .cert_path(tls.cert);
+
+            match tls.verify {
+                Some(verify) => {
+                    let server = server
+                        .client_auth_required_path(verify.ca);
+
+                    server.run(config.listen).await;
+                }
+                None => {
+                    server.run(config.listen).await;
+                }
+            }
+        }
+    }
 
     Ok(())
 }
 
-async fn root() -> Html<String> {
+async fn root() -> impl warp::Reply {
     let version = env!("CARGO_PKG_VERSION");
-    Html(format!("<pre>dprom-export {version}\n\n<a href=\"/metrics\">/metrics</a>\n</pre>\n"))
+    warp::reply::html(format!("<pre>dprom-export {version}\n\n<a href=\"/metrics\">/metrics</a>\n</pre>\n"))
 }
 
-async fn metrics(State(live): State<LiveMetrics>) -> String {
+async fn metrics(live: &LiveMetrics) -> String {
     let mut output = String::new();
 
     for (name, value) in live.read().iter() {
