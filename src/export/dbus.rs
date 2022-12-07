@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::collections::HashMap;
 
-use futures::future;
+use futures::future::{self, Future};
 use futures::stream::{self, Stream, StreamExt, TryStreamExt, FuturesUnordered};
 use zbus::names::{BusName, ErrorName, UniqueName};
 use zbus::zvariant::OwnedObjectPath;
@@ -18,17 +18,13 @@ pub async fn run(log: slog::Logger, export: Export, config: config::Dbus) -> any
     let futures = FuturesUnordered::new();
 
     if config.session {
-        let log = log.new(slog::o!("dbus" => "session"));
-        let conn = Arc::new(zbus::Connection::session().await?);
-        let ctx = Ctx::new(log, conn, export.clone());
-        futures.push(run_top(ctx));
+        futures.push(linger(start_dbus(&log, export.clone(),
+            "session", zbus::Connection::session()).await?));
     }
 
     if config.system {
-        let log = log.new(slog::o!("dbus" => "system"));
-        let conn = Arc::new(zbus::Connection::session().await?);
-        let ctx = Ctx::new(log, conn, export.clone());
-        futures.push(run_top(ctx));
+        futures.push(linger(start_dbus(&log, export.clone(),
+            "system", zbus::Connection::system()).await?));
     }
 
     if futures.is_empty() {
@@ -36,7 +32,19 @@ pub async fn run(log: slog::Logger, export: Export, config: config::Dbus) -> any
     }
 
     futures.try_collect::<()>().await?;
-    Ok(())
+    return Ok(());
+
+    async fn start_dbus(
+        log: &slog::Logger,
+        export: Arc<Export>,
+        kind: &'static str,
+        fut: impl Future<Output = zbus::Result<zbus::Connection>>,
+    ) -> anyhow::Result<impl Future<Output = anyhow::Result<()>>> {
+        let log = log.new(slog::o!("dbus" => kind));
+        let conn = Arc::new(fut.await?);
+        let ctx = Ctx::new(log, conn, export.clone());
+        Ok(run_top(ctx))
+    }
 }
 
 enum NameEvent {
@@ -63,7 +71,7 @@ impl NameEvent {
     }
 }
 
-async fn run_top(ctx: Ctx) -> zbus::Result<()> {
+async fn run_top(ctx: Ctx) -> anyhow::Result<()> {
     let dbus = zbus::fdo::DBusProxy::new(&ctx.conn).await?;
 
     let mut tasks = HashMap::<UniqueName<'static>, Linger<_>>::new();
@@ -104,15 +112,20 @@ async fn run_top(ctx: Ctx) -> zbus::Result<()> {
     async fn bus_task(ctx: BusCtx) {
         match run_bus(ctx.clone()).await {
             Ok(()) => {}
-            Err(e) if is_unknown_dispatch_error(&e) => { /* ignore */ }
             Err(e) => {
-                slog::error!(ctx.log, "bus error: {:?}", e);
+                let unknown_dispatch = e.downcast_ref::<zbus::Error>()
+                    .filter(|e| is_unknown_dispatch_error(e))
+                    .is_some();
+
+                if !unknown_dispatch {
+                    slog::error!(ctx.log, "bus error: {:?}", e);
+                }
             }
         }
     }
 }
 
-async fn run_bus(ctx: BusCtx) -> zbus::Result<()> {
+async fn run_bus(ctx: BusCtx) -> anyhow::Result<()> {
     let dprom = DProm1Proxy::builder(&ctx.conn)
         .destination(ctx.bus.clone())?
         .path("/org/hails/dprom")?
@@ -143,7 +156,7 @@ async fn run_bus(ctx: BusCtx) -> zbus::Result<()> {
     return Ok(());
 
     async fn metric_paths_stream(proxy: DProm1Proxy<'_>)
-        -> Result<impl Stream<Item = Result<Vec<OwnedObjectPath>, zbus::Error>> + '_, zbus::Error>
+        -> anyhow::Result<impl Stream<Item = Result<Vec<OwnedObjectPath>, zbus::Error>> + '_>
     {
         // open receive stream first to prevent race
         let metrics_events = proxy.receive_metrics_changed().await
@@ -167,19 +180,17 @@ async fn run_bus(ctx: BusCtx) -> zbus::Result<()> {
     }
 }
 
-async fn run_metric(ctx: PathCtx) -> zbus::Result<()> {
-    match protect_unknown_dispatch(run_gauge(&ctx).await)? {
-        Some(()) => { return Ok(()); }
-        None => { /* wrong type, try next type */ }
-    }
+async fn run_metric(ctx: PathCtx) -> anyhow::Result<()> {
+    let None = run_gauge(&ctx).await? else { return Ok(()); };
+    // more types when implemented will follow here
 
     slog::warn!(ctx.log, "unknown metric type");
+
     Ok(())
 }
 
-async fn run_gauge(ctx: &PathCtx) -> zbus::Result<()> {
-    let gauge = ctx.proxy::<Gauge1Proxy>().await?;
-    let name = MetricName::from(gauge.name().await?);
+async fn run_gauge(ctx: &PathCtx) -> anyhow::Result<Option<()>> {
+    let Some((name, gauge)) = access(ctx).await? else { return Ok(None) };
 
     // open stream before reading first value to avoid race
     let stream = gauge.receive_value_changed().await
@@ -198,7 +209,14 @@ async fn run_gauge(ctx: &PathCtx) -> zbus::Result<()> {
         metric.gauge(value).await;
     }
 
-    Ok(())
+    return Ok(Some(()));
+
+    /// responsible for checking gauge type
+    async fn access(ctx: &PathCtx) -> zbus::Result<Option<(MetricName, Gauge1Proxy)>> {
+        let gauge = ctx.proxy::<Gauge1Proxy>().await?;
+        Ok(protect_unknown_dispatch(gauge.name().await)?
+            .map(|name| (MetricName::from(name), gauge)))
+    }
 }
 
 fn protect_unknown_dispatch<T>(result: Result<T, zbus::Error>)

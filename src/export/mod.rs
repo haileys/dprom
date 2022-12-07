@@ -14,7 +14,8 @@ pub struct Opt {
 }
 
 pub async fn run(log: slog::Logger, opt: Opt) -> anyhow::Result<()> {
-    let config = config::open(&opt.config).await?;
+    let config = config::open(&opt.config).await
+        .map_err(|e| e.context("opening config"))?;
 
     let (export, metric_stream) = metric::Export::new();
 
