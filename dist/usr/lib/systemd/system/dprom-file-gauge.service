@@ -1,0 +1,9 @@
+[Unit]
+Description=D-Prom file watcher
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/dprom-file-gauge -c /etc/dprom/file_gauge.toml
+
+[Install]
+WantedBy=multi-user.target

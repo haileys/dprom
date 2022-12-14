@@ -22,7 +22,9 @@ package() {
 
     # dist files
     install -Dm0644 -t "$pkgdir/etc/dprom/" "$srcdir/dist/etc/dprom/export.toml"
+    install -Dm0644 -t "$pkgdir/etc/dprom/" "$srcdir/dist/etc/dprom/file_gauge.toml"
     install -Dm0644 -t "$pkgdir/usr/lib/systemd/system/" "$srcdir/dist/usr/lib/systemd/system/dprom-export.service"
+    install -Dm0644 -t "$pkgdir/usr/lib/systemd/system/" "$srcdir/dist/usr/lib/systemd/system/dprom-file-gauge.service"
 
     # dbus interfaces
     install -Dm0644 -t "$pkgdir/usr/share/dbus-1/interfaces/" "$srcdir/dbus/org.hails.dprom.Counter1.xml"
