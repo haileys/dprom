@@ -1,5 +1,6 @@
 [dbus]
-system = true
+session = true
+system = false
 
 [http]
 listen = "0.0.0.0:9110"
@@ -9,4 +10,4 @@ cert = "/etc/node_exporter/mariatu.crt"
 key = "/etc/node_exporter/mariatu.key"
 
 [http.tls.verify]
-ca = "/etc/node_exporter/mariatu.crt"
+ca = "/etc/node_exporter/CA.crt"
