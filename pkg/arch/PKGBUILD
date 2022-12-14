@@ -1,6 +1,12 @@
+# Maintainer: Hailey Somerville <dprom@hails.org>
 pkgname=dprom
-pkgver=0.1.0
+pkgdesc="D-Bus interfaces and services for Prometheus"
+license=("GPL")
+url="https://github.com/hailey/dprom"
+
+pkgver=0.9.0.rc1
 pkgrel=1
+
 depends=("dbus")
 makedepends=("cargo")
 arch=("i686" "x86_64" "armv6h" "armv7h")
