@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use anyhow::Context;
 use futures::stream::{FuturesUnordered, TryStreamExt};
 use structopt::StructOpt;
 use tokio::sync::watch;
@@ -72,9 +73,10 @@ pub struct Opt {
 }
 
 pub async fn run(log: slog::Logger, opt: Opt) -> anyhow::Result<()> {
-    let config = config::open(&opt.config).await?;
+    let config = config::open(&opt.config).await
+        .with_context(|| "config::open")?;
 
-    let ctx = Ctx { log };
+    let ctx = Ctx { log: log.clone() };
 
     // create Gauge models
     let gauges = config.gauges.0.into_iter()
@@ -96,6 +98,10 @@ pub async fn run(log: slog::Logger, opt: Opt) -> anyhow::Result<()> {
     // connect to dbus and serve objects
     let conn = Arc::new(serve_objects(&log, dprom, gauges).await
         .with_context(|| "serve_objects")?);
+
+    if metric_paths.is_empty() {
+        slog::warn!(log, "No gauges configured");
+    }
 
     // spawn refresh tasks
     metric_paths.iter()
