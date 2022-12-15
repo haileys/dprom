@@ -93,8 +93,9 @@ pub async fn run(log: slog::Logger, opt: Opt) -> anyhow::Result<()> {
         metrics: metric_paths.clone(),
     };
 
-    // connect to dbus
-    let conn = Arc::new(build_connection(dprom, gauges).await?);
+    // connect to dbus and serve objects
+    let conn = Arc::new(serve_objects(&log, dprom, gauges).await
+        .with_context(|| "serve_objects")?);
 
     // spawn refresh tasks
     metric_paths.iter()
@@ -124,17 +125,61 @@ pub async fn run(log: slog::Logger, opt: Opt) -> anyhow::Result<()> {
         .await
 }
 
-async fn build_connection(
+async fn serve_objects(
+    log: &slog::Logger,
     dprom: dbus::DProm,
     gauges: Vec<dbus::Gauge>,
 ) -> anyhow::Result<zbus::Connection> {
-    let conn = zbus::ConnectionBuilder::session()?
-        .serve_at("/org/hails/dprom", dprom)?;
+    let builders = [
+        ("session", zbus::ConnectionBuilder::session()),
+        ("system", zbus::ConnectionBuilder::system()),
+    ];
 
-    let conn = gauges.into_iter()
-        .try_fold(conn, |conn, gauge| {
-            conn.serve_at(gauge.object_path(), gauge)
-        })?;
+    let mut last_error = None;
 
-    Ok(conn.build().await?)
+    for (conn_kind, builder) in builders {
+        slog::trace!(log, "trying {} dbus", conn_kind);
+
+        let result = try_connection(builder, dprom.clone(), gauges.clone())
+            .await
+            .with_context(|| format!("try_connection: {}", conn_kind));
+
+        match result {
+            Ok(conn) => {
+                slog::info!(log, "Connected to {} bus", conn_kind);
+                return Ok(conn);
+            }
+            Err(e) => {
+                slog::trace!(log, "Error connecting to {} bus: {:?}", conn_kind, e);
+                last_error = Some(e);
+                continue;
+            }
+        }
+    }
+
+    let Some(last_error) = last_error else {
+        anyhow::bail!("expected error in serve_objects");
+    };
+
+    return Err(last_error);
+
+    async fn try_connection<'a>(
+        builder: zbus::Result<zbus::ConnectionBuilder<'a>>,
+        dprom: dbus::DProm,
+        gauges: Vec<dbus::Gauge>,
+    ) -> anyhow::Result<zbus::Connection> {
+        let conn = builder
+            .with_context(|| "build connection")?
+            .serve_at("/org/hails/dprom", dprom.clone())
+            .with_context(|| "serve_at")?;
+
+        let conn = gauges.into_iter()
+            .try_fold(conn, |conn, gauge| {
+                let path = gauge.object_path();
+                conn.serve_at(&path, gauge)
+                    .with_context(|| format!("serve gauge: {}", path))
+            })?;
+
+        Ok(conn.build().await?)
+    }
 }

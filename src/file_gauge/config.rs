@@ -20,7 +20,7 @@ pub struct Watch {
 #[derive(Deserialize)]
 pub struct Gauges(pub HashMap<GaugeName, PathBuf>);
 
-#[derive(Deserialize, Hash, PartialEq, Eq)]
+#[derive(Deserialize, Hash, PartialEq, Eq, Clone)]
 #[serde(transparent)]
 pub struct GaugeName(#[serde(deserialize_with = "parse_gauge_name")] String);
 

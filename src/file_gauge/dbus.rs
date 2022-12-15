@@ -5,6 +5,7 @@ use zbus::zvariant::{ObjectPath, OwnedObjectPath};
 use crate::file_gauge::config::GaugeName;
 use crate::file_gauge::WatchValue;
 
+#[derive(Clone)]
 pub struct DProm {
     pub metrics: Vec<ObjectPath<'static>>,
 }
@@ -17,6 +18,7 @@ impl DProm {
     }
 }
 
+#[derive(Clone)]
 pub struct Gauge {
     pub name: GaugeName,
     pub watch: watch::Receiver<WatchValue>,
