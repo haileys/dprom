@@ -13,7 +13,9 @@ Example configuration files for both of these services can be found in the [`con
 
 ### Arch Linux
 
-This repo ships with default configuration and Arch-compatible systemd units. A package can be built with the `PKGBUILD` in the [`pkg/arch/`](/pkg/arch) directory:
+Pre-built packages are available on the [releases](https://github.com/haileys/dprom/releases) page.
+
+Packages can also be built from source using the `PKGBUILD` in the [`pkg/arch/`](/pkg/arch) directory:
 
 ```sh-session
 $ cd pkg/arch
